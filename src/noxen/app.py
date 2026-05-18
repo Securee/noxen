@@ -45,6 +45,7 @@ from noxen.exporting import (
 from noxen.filters import FilterManager
 from noxen.frida_devices import enumerate_preferred_devices
 from noxen.frida_session import FridaSession, SessionConfig
+from noxen.history_columns import normalize_history_column_widths
 from noxen.intent_mods import (
     JAVA_TYPE_TO_SIMPLE,
     VALID_EXTRA_TYPES,
@@ -216,6 +217,7 @@ class NoxenApp(App):
         self._sort_column: str | None = "id"
         self._sort_reverse: bool = True
         self._history_visible_cols: set[str] = {key for key, _ in _HISTORY_COLUMNS}
+        self._history_column_widths: dict[str, int] = {}
         self._history_show_stack = False
         self._history_stack_depth: int = self._settings["stack_depth"]
         self._history_selected_entry: dict | None = None
@@ -251,6 +253,7 @@ class NoxenApp(App):
         saved_cols = self.db.load_history_columns()
         if saved_cols is not None:
             self._history_visible_cols = set(saved_cols)
+        self._history_column_widths = self.db.load_history_column_widths()
         self.filter_manager = FilterManager.from_saved(self.db.load_intercept_filters())
         self._history_filter_manager = FilterManager.from_saved(self.db.load_history_filters())
 
@@ -631,6 +634,8 @@ class NoxenApp(App):
                 self._history_visible_cols,
                 on_changed=self._on_columns_changed,
                 columns=_HISTORY_COLUMNS,
+                column_widths=self._history_column_widths,
+                on_widths_changed=self._on_history_column_widths_changed,
             ))
             return
         elif event.button.id == "btn_intercept_stack":
@@ -1376,6 +1381,12 @@ class NoxenApp(App):
         self.db.save_history_columns(list(visible))
         self._refresh_history_table()
 
+    def _on_history_column_widths_changed(self, widths: dict):
+        """Save history column widths to DB and refresh table."""
+        self._history_column_widths = normalize_history_column_widths(widths)
+        self.db.save_history_column_widths(self._history_column_widths)
+        self._refresh_history_table()
+
     def _on_history_filters_changed(self):
         """Save history filters to DB then refresh the table."""
         self.db.save_history_filters(self._history_filter_manager.export())
@@ -1443,7 +1454,7 @@ class NoxenApp(App):
             if key not in visible:
                 continue
             indicator = (" ↓" if self._sort_reverse else " ↑") if key == self._sort_column else ""
-            table.add_column(label + indicator, key=key)
+            table.add_column(label + indicator, key=key, width=self._history_column_widths.get(key))
 
         self._fill_table_rows(table, filtered)
         self._restore_cursor(table, filtered, saved_sel_id)

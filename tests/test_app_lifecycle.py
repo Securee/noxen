@@ -94,6 +94,27 @@ class AppLifecycleTests(unittest.TestCase):
         self.assertEqual(fake_app._current_decision_id, "decision-2")
         self.assertEqual(fake_app._staged_mods, [])
 
+    def test_history_table_applies_saved_column_widths(self):
+        table = _FakeHistoryTable()
+        fake_app = SimpleNamespace(
+            _history_selected_entry=None,
+            _history_visible_cols={"id", "time", "method", "class"},
+            _history_column_widths={"time": 19, "method": 18, "class": 40},
+            _sort_column="id",
+            _sort_reverse=True,
+            query_one=lambda *_args, **_kwargs: table,
+            _get_filtered_sorted=lambda: [],
+            _fill_table_rows=lambda _table, _filtered: None,
+            _restore_cursor=lambda _table, _filtered, _saved: None,
+        )
+
+        NoxenApp._refresh_history_table(fake_app)
+
+        self.assertEqual(table.columns["id"], None)
+        self.assertEqual(table.columns["time"], 19)
+        self.assertEqual(table.columns["method"], 18)
+        self.assertEqual(table.columns["class"], 40)
+
 
 class ImmediateThread:
     def __init__(self, target, daemon=False):
@@ -101,6 +122,18 @@ class ImmediateThread:
 
     def start(self):
         self._target()
+
+
+class _FakeHistoryTable:
+    def __init__(self):
+        self.columns = {}
+
+    def clear(self, columns=False):
+        if columns:
+            self.columns = {}
+
+    def add_column(self, _label, *, key=None, width=None):
+        self.columns[key] = width
 
 
 if __name__ == "__main__":

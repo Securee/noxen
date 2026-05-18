@@ -5,6 +5,8 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 
+from noxen.history_columns import normalize_history_column_widths
+
 _MIGRATED_INTENT_COLUMNS = {
     "outcome": "TEXT",
     "original_intent": "TEXT",
@@ -231,6 +233,14 @@ class ProjectDB:
     def load_history_columns(self) -> list | None:
         """Return saved visible column keys, or None if not set."""
         return self._load_json_info("history_columns", None, list)
+
+    def save_history_column_widths(self, widths: dict) -> None:
+        """Persist optional history column widths."""
+        self.set_info("history_column_widths", json.dumps(normalize_history_column_widths(widths)))
+
+    def load_history_column_widths(self) -> dict[str, int]:
+        """Return saved history column widths, or {} if none."""
+        return normalize_history_column_widths(self._load_json_info("history_column_widths", {}, dict))
 
     def save_history_filters(self, filters: list) -> None:
         """Persist the history filter list to project_info."""

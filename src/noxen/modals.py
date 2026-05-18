@@ -1,6 +1,8 @@
+from collections.abc import Callable
 from pathlib import Path
 
 from rich.text import Text
+
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
@@ -10,14 +12,17 @@ from textual.widgets import (
     DirectoryTree,
     Input,
     Label,
-    ListItem,
-    ListView,
     Rule,
     Select,
     Switch,
 )
 
 from noxen.filters import FilterManager
+from noxen.history_columns import (
+    RESIZABLE_HISTORY_COLUMN_KEYS,
+    normalize_history_column_widths,
+    parse_history_column_width,
+)
 from noxen.textual_compat import is_select_empty
 
 
@@ -111,7 +116,7 @@ class ColumnSelectModal(ModalScreen):
     Button { text-style: bold; }
     ColumnSelectModal { align: center middle; }
     #csm_dialog {
-        width: 36;
+        width: 48;
         height: auto;
         max-height: 90%;
         background: $surface;
@@ -121,54 +126,190 @@ class ColumnSelectModal(ModalScreen):
     #csm_topbar { dock: top; height: 1; align: right middle; }
     #csm_btn_close { height: 1; border: none; padding: 0; width: auto; min-width: 1; }
     #csm_title { width: 100%; content-align: center middle; text-style: bold; margin-bottom: 1; }
-    #csm_list { height: auto; max-height: 20; border: solid $panel; margin-top: 1; }
-    #csm_list > ListItem { padding: 0 1; }
+    #csm_table {
+        height: auto;
+        border: solid $panel;
+        padding: 0 1;
+        margin-top: 1;
+    }
+    .csm_header_row, .csm_column_row { height: 1; align: left middle; }
+    .csm_header { text-style: bold; color: $text-muted; }
+    .csm_column_label { width: 16; content-align: left middle; }
+    .csm_show_label { width: 8; content-align: left middle; }
+    .csm_width_label { width: 11; content-align: left middle; }
+    .csm_show_button {
+        width: 3;
+        min-width: 3;
+        height: 1;
+        border: none;
+        padding: 0;
+        margin-right: 5;
+    }
+    .csm_width_cell { width: 11; height: 1; align: left middle; }
+    .csm_width_input {
+        width: 9;
+        height: 1;
+        border: none;
+        padding: 0;
+        color: $text;
+    }
+    .csm_width_input:focus {
+        border: none;
+        color: $text;
+        background-tint: $surface 0%;
+    }
+    .csm_width_input:disabled {
+        opacity: 100%;
+        border: none;
+        color: $text-muted;
+    }
+    #csm_width_actions { height: 3; margin-top: 1; align: right middle; }
+    #csm_width_actions Button {
+        width: auto;
+        height: 3;
+        border: round $panel-lighten-2;
+        padding: 0 2;
+        background: transparent;
+        text-style: bold;
+        margin-left: 1;
+    }
+    #csm_btn_apply_widths:hover,
+    #csm_btn_apply_widths:focus {
+        border: round #26a368;
+        background: transparent;
+        color: #26a368;
+        background-tint: $surface 0%;
+    }
+    #csm_btn_reset_widths:hover,
+    #csm_btn_reset_widths:focus {
+        border: round #B95B5B;
+        background: transparent;
+        color: #FFB1B1;
+        background-tint: $surface 0%;
+    }
+    #csm_status { height: 1; margin-top: 1; }
     """
 
-    def __init__(self, visible_cols: set, on_changed: callable, columns: list[tuple[str, str]]):
+    def __init__(
+        self,
+        visible_cols: set,
+        on_changed: Callable[[set[str]], None],
+        columns: list[tuple[str, str]],
+        column_widths: dict[str, int] | None = None,
+        on_widths_changed: Callable[[dict[str, int]], None] | None = None,
+    ):
         super().__init__()
         self._visible = set(visible_cols)
         self._on_changed = on_changed
         self._columns = columns
+        self._widths = normalize_history_column_widths(column_widths or {})
+        self._on_widths_changed = on_widths_changed
+        self._resizable_width_keys = [
+            key for key, _label in columns if key in RESIZABLE_HISTORY_COLUMN_KEYS
+        ]
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="csm_dialog"):
             with Horizontal(id="csm_topbar"):
                 yield Button("✕", id="csm_btn_close")
             yield Label("Columns", id="csm_title")
-            yield ListView(id="csm_list")
+            with Vertical(id="csm_table"):
+                with Horizontal(classes="csm_header_row"):
+                    yield Label("Column", classes="csm_column_label csm_header")
+                    yield Label("Show", classes="csm_show_label csm_header")
+                    yield Label("Width", classes="csm_width_label csm_header")
+                for key, label in self._columns:
+                    yield self._column_row(key, label)
+            with Horizontal(id="csm_width_actions"):
+                yield Button("Reset widths", id="csm_btn_reset_widths")
+                yield Button("Apply widths", id="csm_btn_apply_widths")
+            yield Label("", id="csm_status", markup=True)
 
     def on_mount(self):
-        lv = self.query_one("#csm_list", ListView)
-        for key, label in self._columns:
-            vis = "✓ " if key in self._visible else "○ "
-            lv.append(ListItem(Label(vis + (label or key))))
+        self._refresh_rows()
 
-    def _rebuild(self):
-        items = list(self.query_one("#csm_list", ListView).query("ListItem"))
-        for i, (key, label) in enumerate(self._columns):
-            vis = "✓ " if key in self._visible else "○ "
-            items[i].query_one(Label).update(vis + (label or key))
+    def _column_row(self, key: str, label: str) -> Horizontal:
+        return Horizontal(
+            Label(label or key, classes="csm_column_label"),
+            Button(self._show_label(key), id=f"csm_show_{key}", classes="csm_show_button"),
+            self._width_cell(key),
+            id=f"csm_row_{key}",
+            classes="csm_column_row",
+        )
 
-    def on_list_view_selected(self, event: ListView.Selected):
-        if event.list_view.id != "csm_list":
-            return
-        idx = self.query_one("#csm_list", ListView).index
-        if idx is None or idx >= len(self._columns):
-            return
-        col_key = self._columns[idx][0]
+    def _width_cell(self, key: str):
+        width_input = Input(
+            str(self._widths.get(key, "")),
+            id=f"csm_width_{key}",
+            placeholder="auto" if key in self._resizable_width_keys else "-",
+            disabled=key not in self._resizable_width_keys,
+            classes="csm_width_input",
+        )
+        return Horizontal(width_input, classes="csm_width_cell")
+
+    def _show_label(self, key: str) -> str:
+        return "✓" if key in self._visible else "○"
+
+    def _refresh_rows(self):
+        for key, _label in self._columns:
+            self.query_one(f"#csm_show_{key}", Button).label = self._show_label(key)
+
+    def _toggle_column(self, col_key: str):
         if col_key in self._visible:
             if len(self._visible) > 1:
                 self._visible.discard(col_key)
         else:
             self._visible.add(col_key)
-        self._rebuild()
+        self._refresh_rows()
         self._on_changed(set(self._visible))
+
+    def _collect_widths(self) -> tuple[dict[str, int], str]:
+        widths = {}
+        for key in self._resizable_width_keys:
+            raw = self.query_one(f"#csm_width_{key}", Input).value.strip()
+            value, error = parse_history_column_width(raw)
+            if error:
+                return {}, f"[red]{error}[/red]"
+            if value is None:
+                continue
+            widths[key] = value
+        return widths, ""
+
+    def _apply_widths(self):
+        widths, error = self._collect_widths()
+        if error:
+            self.query_one("#csm_status", Label).update(error)
+            return
+        self._widths = widths
+        if self._on_widths_changed is not None:
+            self._on_widths_changed(dict(self._widths))
+        self.query_one("#csm_status", Label).update("[#26a368]Column widths applied[/#26a368]")
+
+    def _reset_widths(self):
+        self._widths = {}
+        for key in self._resizable_width_keys:
+            self.query_one(f"#csm_width_{key}", Input).value = ""
+        if self._on_widths_changed is not None:
+            self._on_widths_changed({})
+        self.query_one("#csm_status", Label).update("[#26a368]Column widths reset[/#26a368]")
 
     def on_button_pressed(self, event: Button.Pressed):
         event.stop()
-        if event.button.id == "csm_btn_close":
+        button_id = event.button.id or ""
+        if button_id == "csm_btn_close":
             self.dismiss()
+        elif button_id.startswith("csm_show_"):
+            self._toggle_column(button_id.removeprefix("csm_show_"))
+        elif button_id == "csm_btn_apply_widths":
+            self._apply_widths()
+        elif button_id == "csm_btn_reset_widths":
+            self._reset_widths()
+
+    def on_input_submitted(self, event: Input.Submitted):
+        input_id = event.input.id or ""
+        if input_id.startswith("csm_width_"):
+            event.stop()
+            self._apply_widths()
 
 
 class HelpModal(ModalScreen):

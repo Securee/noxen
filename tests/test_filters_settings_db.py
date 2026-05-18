@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from noxen.db import ProjectDB
 from noxen.filters import FilterManager
+from noxen.history_columns import parse_history_column_width
 from noxen.settings import load_settings, save_settings, settings_file_path
 
 
@@ -194,6 +195,26 @@ class SettingsTests(unittest.TestCase):
             )
 
 
+class HistoryColumnWidthTests(unittest.TestCase):
+    def test_parse_history_column_width_accepts_auto_and_empty_values(self):
+        self.assertEqual(parse_history_column_width("auto"), (None, ""))
+        self.assertEqual(parse_history_column_width(""), (None, ""))
+
+    def test_parse_history_column_width_rejects_non_numeric_values_with_auto_hint(self):
+        self.assertEqual(
+            parse_history_column_width("wide"),
+            (None, "Width must be a number or auto"),
+        )
+
+    def test_parse_history_column_width_validates_range(self):
+        self.assertEqual(parse_history_column_width("5"), (5, ""))
+        self.assertEqual(parse_history_column_width("150"), (150, ""))
+        self.assertEqual(
+            parse_history_column_width("4"),
+            (None, "Width must be auto or between 5 and 150"),
+        )
+
+
 class ProjectDBTests(unittest.TestCase):
     def test_open_existing_migrates_legacy_intents_columns(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -275,6 +296,29 @@ class ProjectDBTests(unittest.TestCase):
             self.assertEqual(cleared.load_extra_script_path(), "")
             cleared.close()
 
+    def test_history_column_widths_roundtrip_through_project_info(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "project.noxen")
+            db = ProjectDB(path)
+            db.create("project")
+            db.save_history_column_widths({
+                "time": 19,
+                "method": 12,
+                "class": "40",
+                "component": 150,
+                "action": 4,
+                "unknown": 20,
+            })
+            db.close()
+
+            reopened = ProjectDB(path)
+            reopened.open_existing()
+            self.assertEqual(
+                reopened.load_history_column_widths(),
+                {"time": 19, "method": 12, "class": 40, "component": 150},
+            )
+            reopened.close()
+
     def test_invalid_project_info_json_falls_back_to_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "project.noxen")
@@ -283,10 +327,12 @@ class ProjectDBTests(unittest.TestCase):
             db.set_info("intercept_filters", "{not-json")
             db.set_info("history_filters", '{"bad": "shape"}')
             db.set_info("history_columns", '{"bad": "shape"}')
+            db.set_info("history_column_widths", '["bad"]')
 
             self.assertEqual(db.load_intercept_filters(), [])
             self.assertEqual(db.load_history_filters(), [])
             self.assertIsNone(db.load_history_columns())
+            self.assertEqual(db.load_history_column_widths(), {})
             db.close()
 
     def test_invalid_intent_json_uses_safe_defaults(self):
