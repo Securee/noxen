@@ -11388,10 +11388,10 @@ std_string_c_str (StdString * self)
               env.deleteLocalRef(reflectedMethod);
             }
           }
-          const returnTypeName = returnType.name;
+          const returnTypeName2 = returnType.name;
           const argumentTypeNames = argumentTypes.map((t) => t.name);
-          const signature = "(" + argumentTypeNames.join("") + ")" + returnTypeName;
-          dexMethods.push([name, returnTypeName, argumentTypeNames, thrownTypeNames, type === STATIC_METHOD ? kAccStatic2 : 0]);
+          const signature = "(" + argumentTypeNames.join("") + ")" + returnTypeName2;
+          dexMethods.push([name, returnTypeName2, argumentTypeNames, thrownTypeNames, type === STATIC_METHOD ? kAccStatic2 : 0]);
           implMethods.push([name, signature, type, returnType, argumentTypes, impl]);
         });
         const unimplementedMethodIds = Object.keys(pendingOverloads);
@@ -13727,9 +13727,25 @@ std_string_c_str (StdString * self)
   function matchesActiveDecision(decisionId) {
     return waiting && (!decisionId || decisionId === activeDecisionId);
   }
+  function returnTypeName(overload) {
+    try {
+      return overload.returnType.className || overload.returnType.name || "";
+    } catch (_) {
+      return "";
+    }
+  }
+  function defaultReturn(returnType) {
+    if (returnType === "void") return void 0;
+    if (returnType === "boolean") return false;
+    if (returnType === "char") return "\0";
+    if (returnType === "byte" || returnType === "double" || returnType === "float" || returnType === "int" || returnType === "long" || returnType === "short") {
+      return 0;
+    }
+    return null;
+  }
   function createHook(targetWrapper, className, methodName, overloadArgs) {
     const method = targetWrapper[methodName].overload.apply(targetWrapper[methodName], overloadArgs);
-    const isBoolean = method.returnType.className === "boolean";
+    const returnType = returnTypeName(method);
     const isPendingIntent = className === "android.app.PendingIntent";
     method.implementation = function() {
       var firstArg = arguments.length > 0 ? arguments[0] : null;
@@ -13755,12 +13771,12 @@ std_string_c_str (StdString * self)
       }
       var as = buildAttackSurface(methodName, intent, this, firstArg);
       var shouldDrop = processIntercept(this.$className, methodName, intent, pendingIntentFlags, as);
-      if (shouldDrop) return isBoolean ? false : null;
+      if (shouldDrop) return defaultReturn(returnType);
       try {
         return method.apply(this, arguments);
       } catch (e) {
         send("[!] Forward error in " + methodName + ": " + e);
-        return isBoolean ? false : null;
+        return defaultReturn(returnType);
       }
     };
   }

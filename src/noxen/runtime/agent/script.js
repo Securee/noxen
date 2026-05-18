@@ -278,9 +278,34 @@ function matchesActiveDecision(decisionId) {
   return waiting && (!decisionId || decisionId === activeDecisionId);
 }
 
+function returnTypeName(overload) {
+  try {
+    return overload.returnType.className || overload.returnType.name || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function defaultReturn(returnType) {
+  if (returnType === "void") return undefined;
+  if (returnType === "boolean") return false;
+  if (returnType === "char") return "\u0000";
+  if (
+    returnType === "byte" ||
+    returnType === "double" ||
+    returnType === "float" ||
+    returnType === "int" ||
+    returnType === "long" ||
+    returnType === "short"
+  ) {
+    return 0;
+  }
+  return null;
+}
+
 function createHook(targetWrapper, className, methodName, overloadArgs) {
   const method = targetWrapper[methodName].overload.apply(targetWrapper[methodName], overloadArgs);
-  const isBoolean = method.returnType.className === 'boolean';
+  const returnType = returnTypeName(method);
   const isPendingIntent = className === 'android.app.PendingIntent';
 
   method.implementation = function () {
@@ -313,13 +338,13 @@ function createHook(targetWrapper, className, methodName, overloadArgs) {
     var as = buildAttackSurface(methodName, intent, this, firstArg);
     var shouldDrop = processIntercept(this.$className, methodName, intent, pendingIntentFlags, as);
 
-    if (shouldDrop) return isBoolean ? false : null;
+    if (shouldDrop) return defaultReturn(returnType);
 
     try {
       return method.apply(this, arguments);
     } catch (e) {
       send("[!] Forward error in " + methodName + ": " + e);
-      return isBoolean ? false : null;
+      return defaultReturn(returnType);
     }
   };
 }
