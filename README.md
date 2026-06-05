@@ -60,12 +60,6 @@ Launch noxen:
 noxen
 ```
 
-You can also launch it through Python:
-
-```bash
-python -m noxen
-```
-
 Select the device, mode, and target app from the Home tab. Use `noxen --project session.noxen`
 to open an existing project or `noxen --new-project session` to create one.
 
